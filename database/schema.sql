@@ -232,7 +232,3 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notif_user   ON notifications(user_id);
 CREATE INDEX IF NOT EXISTS idx_notif_status ON notifications(status);
-
-CREATE TYPE user_role AS ENUM (
-  'admin', 'officer', 'citizen', 'reviewer', 'auditor'
-);

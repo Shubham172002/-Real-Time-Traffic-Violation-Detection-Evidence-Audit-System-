@@ -124,6 +124,13 @@ traffic-violation-system/
 4. Use managed PostgreSQL (Supabase / Neon / Railway)
 5. For file storage, configure AWS S3 (set STORAGE_BACKEND=s3)
 
+### Supabase Setup
+
+1. Create a Supabase project and copy the Postgres connection string.
+2. Set `DATABASE_URL` with the Supabase connection string and include `?sslmode=require`.
+3. Create tables by running [database/schema.sql](/D:/adbms%20project2/-Real-Time-Traffic-Violation-Detection-Evidence-Audit-System-/database/schema.sql) in the Supabase SQL editor, or enable `AUTO_INIT_DB=true` if you want the app to create tables automatically.
+4. Seed demo data with `python database/seed_data.py` after the database is connected.
+
 ### AWS EC2 + RDS
 
 ```bash

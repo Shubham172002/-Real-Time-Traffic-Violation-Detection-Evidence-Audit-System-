@@ -59,12 +59,22 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+_db_initialized = False
+AUTO_INIT_DB = os.getenv("AUTO_INIT_DB", "false").lower() == "true"
 
-init_db()
+
+def ensure_db_initialized():
+    global _db_initialized
+    if _db_initialized:
+        return
+    if AUTO_INIT_DB:
+        init_db()
+    _db_initialized = True
 
 
 # ── DB dependency ─────────────────────────────────────────────────────────────
 def get_db():
+    ensure_db_initialized()
     db = SessionLocal()
     try:
         yield db
@@ -136,6 +146,14 @@ class RegisterRequest(BaseModel):
     vehicle_model: Optional[str] = None
     vehicle_color: Optional[str] = None
     vehicle_type: Optional[str] = "car"
+
+
+@app.get("/")
+def root():
+    return {
+        "status": "ok",
+        "service": "traffic-violation-api",
+    }
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest, db=Depends(get_db)):

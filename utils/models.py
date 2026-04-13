@@ -20,10 +20,9 @@ class User(Base):
     phone = Column(String(20))
     password_hash = Column(String(200), nullable=False)
     role = Column(
-    SAEnum(
+        SAEnum(
             "admin", "officer", "citizen", "reviewer", "auditor",
             name="user_role",
-            create_type=False   # IMPORTANT
         ),
         nullable=False,
         default="citizen",
