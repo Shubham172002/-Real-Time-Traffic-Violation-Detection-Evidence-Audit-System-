@@ -295,11 +295,30 @@ with tab1:
 # ════════════════════════════════════════════════════════════════════════════════
 with tab2:
     st.subheader("Record New Traffic Violation")
+    db = get_db()
+    try:
+        registered_citizens = (
+            db.query(User)
+            .filter(User.role == "citizen", User.is_active == True)
+            .order_by(User.name.asc())
+            .all()
+        )
+    finally:
+        db.close()
+
+    citizen_options = {"Auto-detect from vehicle plate": None}
+    for citizen in registered_citizens:
+        citizen_options[f"{citizen.name} ({citizen.email})"] = citizen.id
+
     with st.form("new_violation_form"):
         col1, col2 = st.columns(2)
         with col1:
             plate            = st.text_input("Vehicle Plate Number *", placeholder="MH12AB1234").upper()
-            owner_name       = st.text_input("Owner Name (if known)", placeholder="Optional")
+            selected_citizen_label = st.selectbox(
+                "Registered Citizen",
+                list(citizen_options.keys()),
+                help="Choose a registered citizen to link the vehicle. If the plate is already registered, leave this on auto-detect."
+            )
             vtype            = st.selectbox(
                 "Violation Type *",
                 ["speeding", "red_light", "wrong_lane", "no_helmet", "no_seatbelt", "illegal_parking", "other"],
@@ -324,17 +343,24 @@ with tab2:
         else:
             db = get_db()
             try:
+                selected_citizen_id = citizen_options[selected_citizen_label]
                 vehicle = db.query(Vehicle).filter_by(plate_number=plate).first()
+                selected_owner = db.query(User).filter_by(id=selected_citizen_id).first() if selected_citizen_id else None
+
+                if vehicle and selected_owner and vehicle.owner_id and vehicle.owner_id != selected_owner.id:
+                    st.error("This vehicle plate is already linked to a different citizen. Use the registered owner or update the plate mapping first.")
+                    st.stop()
+
                 if not vehicle:
-                    vehicle = Vehicle(plate_number=plate, model="Unknown")
-                    if owner_name:
-                        owner = db.query(User).filter(
-                            User.name.ilike(f"%{owner_name}%"), User.role == "citizen"
-                        ).first()
-                        if owner:
-                            vehicle.owner_id = owner.id
+                    vehicle = Vehicle(
+                        plate_number=plate,
+                        owner_id=selected_owner.id if selected_owner else None,
+                        model="Unknown",
+                    )
                     db.add(vehicle)
                     db.flush()
+                elif selected_owner and not vehicle.owner_id:
+                    vehicle.owner_id = selected_owner.id
 
                 fine_rules = load_fine_rules(db)
                 result     = evaluate_violation(
@@ -366,6 +392,13 @@ with tab2:
                 db.commit()
 
                 st.success(f"Violation #{violation.id} recorded!")
+                if vehicle.owner:
+                    st.info(
+                        f"Linked to citizen account: **{vehicle.owner.name}** ({vehicle.owner.email}). "
+                        "This citizen will be able to view the challan, pay the fine, or raise an appeal after it is issued."
+                    )
+                else:
+                    st.warning("This vehicle is not linked to a citizen account yet, so no citizen will see the challan until the vehicle is assigned to one.")
                 st.info(
                     f"**Detection:** {result.violation_status.upper()} | "
                     f"Suggested fine: Rs.{result.challan_amount:,.0f}"

@@ -18,7 +18,7 @@ st.set_page_config(
 # ── DB init on first run ──────────────────────────────────────────────────────
 from utils.database import init_db, get_db
 from utils.auth import authenticate_user, login_user, logout_user, is_logged_in
-from utils.models import User
+from utils.models import User, Vehicle
 from utils.helpers import status_badge
 
 init_db()
@@ -221,11 +221,15 @@ else:
                 r_name  = st.text_input("Full Name")
                 r_email = st.text_input("Email")
                 r_phone = st.text_input("Phone")
+                r_plate = st.text_input("Vehicle Plate Number", placeholder="MH12AB1234").upper().strip()
+                r_model = st.text_input("Vehicle Model", placeholder="Optional")
+                r_color = st.text_input("Vehicle Color", placeholder="Optional")
+                r_type  = st.selectbox("Vehicle Type", ["car", "bike", "scooter", "truck", "bus", "other"])
                 r_pwd   = st.text_input("Password", type="password")
                 r_sub   = st.form_submit_button("Register")
             if r_sub:
-                if not all([r_name, r_email, r_phone, r_pwd]):
-                    st.error("All fields are required.")
+                if not all([r_name, r_email, r_phone, r_plate, r_pwd]):
+                    st.error("Name, email, phone, plate number and password are required.")
                 elif len(r_pwd) < 6:
                     st.error("Password must be at least 6 characters.")
                 else:
@@ -233,8 +237,11 @@ else:
                     db = get_db()
                     try:
                         existing = db.query(User).filter_by(email=r_email.lower()).first()
+                        existing_vehicle = db.query(Vehicle).filter_by(plate_number=r_plate).first()
                         if existing:
                             st.error("Email already registered.")
+                        elif existing_vehicle and existing_vehicle.owner_id:
+                            st.error("This vehicle plate is already linked to another citizen account.")
                         else:
                             new_user = User(
                                 name=r_name,
@@ -244,7 +251,23 @@ else:
                                 role="citizen",
                             )
                             db.add(new_user)
+                            db.flush()
+
+                            if existing_vehicle:
+                                existing_vehicle.owner_id = new_user.id
+                                existing_vehicle.model = existing_vehicle.model or (r_model.strip() if r_model else None)
+                                existing_vehicle.color = existing_vehicle.color or (r_color.strip() if r_color else None)
+                                existing_vehicle.vehicle_type = existing_vehicle.vehicle_type or r_type
+                            else:
+                                db.add(Vehicle(
+                                    plate_number=r_plate,
+                                    owner_id=new_user.id,
+                                    model=r_model.strip() if r_model else None,
+                                    color=r_color.strip() if r_color else None,
+                                    vehicle_type=r_type,
+                                ))
+
                             db.commit()
-                            st.success("Registered! Please log in.")
+                            st.success("Registered successfully. Officers can now issue challans against your registered vehicle, and you will be able to pay or appeal them after login.")
                     finally:
                         db.close()

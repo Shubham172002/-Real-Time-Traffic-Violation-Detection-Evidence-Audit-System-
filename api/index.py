@@ -94,6 +94,31 @@ def require_roles(*roles):
     return checker
 
 
+def get_registered_citizen(db, citizen_id: Optional[int]) -> Optional[User]:
+    if citizen_id is None:
+        return None
+    citizen = (
+        db.query(User)
+        .filter(User.id == citizen_id, User.role == "citizen", User.is_active == True)
+        .first()
+    )
+    if not citizen:
+        raise HTTPException(status_code=404, detail="Registered citizen not found")
+    return citizen
+
+
+def ensure_citizen_owns_challan(challan: Challan, current_user: User) -> None:
+    if current_user.role != "citizen":
+        return
+    owner_id = (
+        challan.violation.vehicle.owner_id
+        if challan and challan.violation and challan.violation.vehicle
+        else None
+    )
+    if owner_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only access challans for your registered vehicles")
+
+
 # ═════════════════════════════════════════════════════════════════════════════
 # AUTH ENDPOINTS
 # ═════════════════════════════════════════════════════════════════════════════
@@ -107,6 +132,10 @@ class RegisterRequest(BaseModel):
     email: str
     phone: Optional[str] = None
     password: str
+    vehicle_plate_number: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    vehicle_color: Optional[str] = None
+    vehicle_type: Optional[str] = "car"
 
 @app.post("/api/auth/login")
 def login(req: LoginRequest, db=Depends(get_db)):
@@ -123,14 +152,39 @@ def login(req: LoginRequest, db=Depends(get_db)):
 def register(req: RegisterRequest, db=Depends(get_db)):
     if db.query(User).filter_by(email=req.email.lower()).first():
         raise HTTPException(status_code=400, detail="Email already registered")
+    normalized_plate = req.vehicle_plate_number.strip().upper() if req.vehicle_plate_number else None
+    existing_vehicle = db.query(Vehicle).filter_by(plate_number=normalized_plate).first() if normalized_plate else None
+    if existing_vehicle and existing_vehicle.owner_id:
+        raise HTTPException(status_code=400, detail="This vehicle plate is already linked to another citizen")
     user = User(
         name=req.name, email=req.email.lower(), phone=req.phone,
         password_hash=hash_password(req.password), role="citizen"
     )
     db.add(user)
+    db.flush()
+
+    if normalized_plate:
+        if existing_vehicle:
+            existing_vehicle.owner_id = user.id
+            existing_vehicle.model = existing_vehicle.model or req.vehicle_model
+            existing_vehicle.color = existing_vehicle.color or req.vehicle_color
+            existing_vehicle.vehicle_type = existing_vehicle.vehicle_type or req.vehicle_type or "car"
+        else:
+            db.add(Vehicle(
+                plate_number=normalized_plate,
+                owner_id=user.id,
+                model=req.vehicle_model,
+                color=req.vehicle_color,
+                vehicle_type=req.vehicle_type or "car",
+            ))
+
     db.commit()
     db.refresh(user)
-    return {"message": "Registered successfully", "user_id": user.id}
+    return {
+        "message": "Registered successfully",
+        "user_id": user.id,
+        "vehicle_plate_number": normalized_plate,
+    }
 
 @app.get("/api/auth/me")
 def me(current_user: User = Depends(get_current_user)):
@@ -147,6 +201,7 @@ def me(current_user: User = Depends(get_current_user)):
 
 class ViolationCreate(BaseModel):
     plate_number: str
+    citizen_id: Optional[int] = None
     violation_type: str
     location: str
     speed_recorded: Optional[float] = None
@@ -165,10 +220,21 @@ def create_violation(
     current_user: User = Depends(require_roles("officer", "admin"))
 ):
     vehicle = db.query(Vehicle).filter_by(plate_number=req.plate_number.upper()).first()
+    registered_citizen = get_registered_citizen(db, req.citizen_id)
+
+    if vehicle and registered_citizen and vehicle.owner_id and vehicle.owner_id != registered_citizen.id:
+        raise HTTPException(status_code=400, detail="Vehicle is already linked to another registered citizen")
+
     if not vehicle:
-        vehicle = Vehicle(plate_number=req.plate_number.upper(), model="Unknown")
+        vehicle = Vehicle(
+            plate_number=req.plate_number.upper(),
+            owner_id=registered_citizen.id if registered_citizen else None,
+            model="Unknown",
+        )
         db.add(vehicle)
         db.flush()
+    elif registered_citizen and not vehicle.owner_id:
+        vehicle.owner_id = registered_citizen.id
 
     fine_rules = load_fine_rules(db)
     result = evaluate_violation(
@@ -239,6 +305,12 @@ def get_violation(
     v = db.query(Violation).get(violation_id)
     if not v:
         raise HTTPException(status_code=404, detail="Violation not found")
+    if current_user.role == "officer" and v.officer_id != current_user.id:
+        raise HTTPException(status_code=403, detail="You can only access violations created by you")
+    if current_user.role == "citizen":
+        owner_id = v.vehicle.owner_id if v.vehicle else None
+        if owner_id != current_user.id:
+            raise HTTPException(status_code=403, detail="You can only access violations for your registered vehicles")
     return {
         "id": v.id, "plate": v.vehicle.plate_number if v.vehicle else None,
         "type": v.violation_type, "location": v.location,
@@ -395,6 +467,7 @@ def pay_challan(
     challan = db.query(Challan).get(challan_id)
     if not challan:
         raise HTTPException(status_code=404, detail="Challan not found")
+    ensure_citizen_owns_challan(challan, current_user)
     if challan.status != "unpaid":
         raise HTTPException(status_code=400, detail=f"Challan is {challan.status}, cannot pay")
     challan.status            = "paid"
@@ -423,8 +496,19 @@ def submit_appeal(
     challan = db.query(Challan).get(req.challan_id)
     if not challan:
         raise HTTPException(status_code=404, detail="Challan not found")
+    ensure_citizen_owns_challan(challan, current_user)
     if challan.status not in ("unpaid", "under_appeal"):
         raise HTTPException(status_code=400, detail="Challan not eligible for appeal")
+    existing_open_appeal = (
+        db.query(Appeal)
+        .filter(
+            Appeal.challan_id == req.challan_id,
+            Appeal.status.in_(["pending", "under_review", "more_info_needed"]),
+        )
+        .first()
+    )
+    if existing_open_appeal:
+        raise HTTPException(status_code=400, detail="An active appeal already exists for this challan")
 
     appeal = Appeal(
         challan_id=req.challan_id, citizen_id=current_user.id,
