@@ -1,0 +1,19 @@
+streamlit>=1.28.0
+sqlalchemy>=2.0.0
+psycopg2-binary>=2.9.0
+bcrypt>=4.0.0
+python-jose[cryptography]>=3.3.0
+boto3>=1.28.0
+python-dotenv>=1.0.0
+pandas>=2.0.0
+plotly>=5.15.0
+pillow>=10.0.0
+apscheduler>=3.10.0
+requests>=2.31.0
+alembic>=1.12.0
+streamlit-option-menu>=0.3.6
+# Vercel FastAPI backend
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+python-multipart>=0.0.6
+pydantic[email]>=2.0.0
